@@ -1,0 +1,31 @@
+# macOS
+.DS_Store
+
+# 模型（1.9GB，用 download_model.sh 下载）
+models/
+
+# 打包产物与运行环境（发布到 GitHub Releases，不进仓库）
+macapp/build/
+macapp/dist/
+macapp/runtime/
+
+# 个人数据：识别历史、日志、笔记
+data/
+test.md
+*.log
+
+# 本机环境信息
+myEnv-freeze-backup.txt
+
+# 示例图中有版权不明的报纸版面
+samples/paddleocr_vl_demo.png
+
+# 签名证书与密钥（make_cert.sh 只把证书放进钥匙串，这里防止误导出后提交）
+*.p12
+*.pem
+*.key
+*.cer
+
+# Python
+__pycache__/
+*.pyc
