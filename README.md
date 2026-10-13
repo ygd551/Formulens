@@ -75,7 +75,7 @@ The menu bar icon shows `∑·` while the model is loading and `∑…` while re
 - **Image size limits**: images over 50 MB or 100 megapixels are rejected before decoding, so crafted images cannot exhaust memory
 - **Data location**: history and logs are stored in `~/Library/Application Support/Formulens/`, accessible only by your user. Delete that folder to clear everything.
 - **Verifiable builds**: the model, the Python runtime and every Python dependency are checked against SHA-256 hashes after download. Any replaced file makes the build fail.
-- To report a security issue, please contact the maintainer privately first instead of opening a public issue with exploit details.
+- To report a security issue, please follow [SECURITY.md](SECURITY.md) (private report via the Security tab) instead of opening a public issue.
 
 ## Uninstall (macOS)
 
@@ -123,7 +123,7 @@ Quit the app → delete Formulens from Applications → delete `~/Library/Applic
 - [ ] More UI languages
 - [ ] Search in history
 
-Ideas and pull requests are welcome, especially for the Windows and Linux versions.
+Ideas and pull requests are welcome, especially for the Windows and Linux versions. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Build from source (macOS)
 

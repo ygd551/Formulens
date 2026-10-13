@@ -75,7 +75,7 @@
 - **图片大小限制**：超过 50MB 或 1 亿像素的图片会在解码前被拒绝，防止恶意构造的图片耗尽内存
 - **数据位置**：识别历史和日志保存在 `~/Library/Application Support/Formulens/`，只有当前用户可以访问；删除这个文件夹即可清除。
 - **可校验的构建**：模型、Python 运行环境和全部 Python 依赖在下载后都会校验 SHA-256，任何文件被替换都会导致构建失败。
-- 发现安全问题请通过 GitHub Issues 报告；如果涉及漏洞细节，请先通过私信联系，不要公开披露。
+- 发现安全问题请按照 [SECURITY.md](SECURITY.md) 私下报告（仓库 Security 页面 → Report a vulnerability），不要在公开的 Issue 中披露。
 
 ## 卸载（macOS）
 
@@ -123,7 +123,7 @@
 - [ ] 更多界面语言
 - [ ] 历史记录搜索
 
-欢迎通过 Issues 提出建议，或通过 Pull Request 参与开发，尤其是 Windows 和 Linux 版本。
+欢迎通过 Issues 提出建议，或通过 Pull Request 参与开发，尤其是 Windows 和 Linux 版本。参与方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 从源码构建（macOS）
 

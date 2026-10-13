@@ -1,0 +1,14 @@
+name: Feature request · 功能建议
+description: Suggest an idea for Formulens · 提出新功能或改进建议
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like? · 你希望增加什么？
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why is it useful? · 使用场景

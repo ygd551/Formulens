@@ -1,0 +1,38 @@
+name: Bug report · 问题报告
+description: Something doesn't work as expected · 软件运行不正常
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For security issues, please use **Security → Report a vulnerability** instead. · 安全问题请通过 Security 页面私下报告。
+        **Do not attach screenshots containing private information.** · 请勿附上包含隐私内容的截图。
+  - type: input
+    id: version
+    attributes:
+      label: Formulens version · 版本
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Mac model and macOS version · 机型与 macOS 版本
+      placeholder: "MacBook Air M2 16GB, macOS 15.2"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened? · 发生了什么？
+      description: Steps to reproduce, expected vs. actual result · 复现步骤、预期结果与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log · 日志
+      description: |
+        Last lines of `~/Library/Application Support/Formulens/model_server.log`, if the model fails to start.
+        如果模型启动失败，请附上该日志的最后几十行。
+      render: text
