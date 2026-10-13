@@ -82,7 +82,8 @@ final class Recognizer {
             let md = TextFormat.otslToMarkdown(raw)
             return ("table", md, md, raw)
         }
-        if let pure = TextFormat.stripMath(raw) ?? (asFormula ? TextFormat.trimDelimiters(raw) : nil) {
+        if let found = TextFormat.stripMath(raw) ?? (asFormula ? TextFormat.trimDelimiters(raw) : nil) {
+            let pure = TextFormat.dropNumberingCommands(found)
             return ("formula", pure, "$$\n\(pure)\n$$", raw)
         }
         return ("text", raw, TextFormat.toMarkdownMath(raw), raw)
@@ -191,6 +192,17 @@ enum TextFormat {
         let range = NSRange(location: 0, length: ns.length)
         return latinWord.numberOfMatches(in: ns as String, range: range) == 0
             && cjkChar.numberOfMatches(in: ns as String, range: range) == 0
+    }
+
+    /// 模型偶尔会在单个公式开头输出 \nonumber / \notag，单独使用时在 KaTeX 等环境中会报错
+    static func dropNumberingCommands(_ s: String) -> String {
+        var t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        for cmd in ["\\nonumber", "\\notag"] where t.hasPrefix(cmd) {
+            // 后面紧跟字母时是另一个命令（如 \nonumberx），不处理
+            if let next = t.dropFirst(cmd.count).first, next.isLetter { continue }
+            t.removeFirst(cmd.count)
+        }
+        return t.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// 去掉首尾的公式定界符

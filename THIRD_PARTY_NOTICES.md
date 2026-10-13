@@ -17,8 +17,13 @@ Formulens 自身的代码以 MIT 许可证发布（见 [LICENSE](LICENSE)）。
 
 | 组件 | 版本 | 许可证 | 来源 |
 |---|---|---|---|
-| KaTeX | 0.16.11 | MIT | https://katex.org |
+| KaTeX | 0.16.11 | MIT；部分代码与字体素材为 OFL-1.1 / Apache-2.0（见下） | https://katex.org |
 | CPython（python-build-standalone 构建） | 3.12.15 | PSF-2.0 及其附带组件的许可证 | https://github.com/astral-sh/python-build-standalone |
+
+KaTeX 主体以 MIT 许可证发布（`macapp/Resources/katex/LICENSE`）。其中伸缩符号的 SVG 路径数据
+（Copyright 2009-2010 Design Science, Inc.；2014-2017 Khan Academy）及部分源自 AMS 字体的素材
+（Copyright 1995, 2009 American Mathematical Society）以 SIL Open Font License 1.1 发布；
+部分字体生成脚本源自 MathJax（Apache-2.0）。OFL 1.1 全文：https://openfontlicense.org
 
 CPython 及其附带的 OpenSSL、SQLite、libffi、zlib、xz、bzip2、mpdecimal 等组件的许可证见
 `python/lib/python3.12/LICENSE.txt`。

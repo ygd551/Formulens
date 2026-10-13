@@ -15,16 +15,20 @@ let path = NSBezierPath(roundedRect: rect, xRadius: 185, yRadius: 185)
 NSGradient(starting: NSColor(red: 0.40, green: 0.36, blue: 0.98, alpha: 1),
            ending: NSColor(red: 0.20, green: 0.16, blue: 0.62, alpha: 1))!.draw(in: path, angle: -90)
 
-let style = NSMutableParagraphStyle()
-style.alignment = .center
-let attrs: [NSAttributedString.Key: Any] = [
-    .font: NSFont.systemFont(ofSize: 560, weight: .light),
-    .foregroundColor: NSColor.white,
-    .paragraphStyle: style,
-]
-let glyph = NSAttributedString(string: "∑", attributes: attrs)
-let gs = glyph.size()
-glyph.draw(in: NSRect(x: rect.minX, y: rect.midY - gs.height / 2 + 10, width: rect.width, height: gs.height))
+// ∑ 用线条自行绘制，不使用系统字体字形（字体许可不覆盖图标用途，也便于以后用于其他平台）
+NSColor.white.setStroke()
+let sigma = NSBezierPath()
+sigma.lineWidth = 46
+sigma.lineJoinStyle = .miter
+sigma.lineCapStyle = .butt
+sigma.move(to: NSPoint(x: 676, y: 664))   // 上横右端（向下的小折角）
+sigma.line(to: NSPoint(x: 676, y: 700))
+sigma.line(to: NSPoint(x: 356, y: 700))   // 上横
+sigma.line(to: NSPoint(x: 540, y: 512))   // 斜向中点
+sigma.line(to: NSPoint(x: 356, y: 324))   // 斜回
+sigma.line(to: NSPoint(x: 676, y: 324))   // 下横
+sigma.line(to: NSPoint(x: 676, y: 360))   // 下横右端（向上的小折角）
+sigma.stroke()
 
 // 右下角的截图框标记
 NSColor.white.withAlphaComponent(0.85).setStroke()

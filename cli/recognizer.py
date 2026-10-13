@@ -185,6 +185,8 @@ def recognize(img: Image.Image, mode: str = "auto") -> dict:
             if pure is None and as_formula:
                 pure = _trim_delimiters(raw)
             if pure is not None:
+                # 模型偶尔会在单个公式开头输出 \nonumber / \notag，单独使用时会报错
+                pure = re.sub(r"^\s*\\(nonumber|notag)\b\s*", "", pure)
                 kind, latex, md = "formula", pure, "$$\n" + pure + "\n$$"
             else:
                 kind, latex, md = "text", raw, _to_markdown_math(raw)
