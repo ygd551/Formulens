@@ -32,6 +32,12 @@ struct ContentView: View {
                     .transition(.opacity)
             }
         }
+        .alert(L("Delete selected history?"), isPresented: $m.showDeletionConfirmation) {
+            Button(L("Cancel"), role: .cancel) { m.deletionIDs = [] }
+            Button(L("Delete"), role: .destructive) { m.confirmDeletion() }
+        } message: {
+            Text(L("Permanently delete %@ records and their saved images? This cannot be undone.", String(m.deletionIDs.count)))
+        }
         .animation(.easeInOut(duration: 0.15), value: m.toast)
         .onDrop(of: [.fileURL, .image], isTargeted: $dropTargeted) { providers in
             handleDrop(providers)
@@ -69,7 +75,7 @@ struct HistoryList: View {
                 Circle()
                     .fill(m.serverState == .ready ? Color.green : m.serverState == .failed ? Color.red : Color.orange)
                     .frame(width: 8, height: 8)
-                Text(m.serverState == .ready ? L("Model ready") : m.serverState == .failed ? L("Model failed to start") : L("Loading model…"))
+                Text(m.serverState.title).lineLimit(2)
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Text(L("%@ items", String(m.history.count))).font(.caption).foregroundStyle(.secondary)
@@ -90,10 +96,24 @@ struct HistoryList: View {
                 .help(L("Language"))
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
+            ModelControls()
             Divider()
+            HStack {
+                Button(m.markedIDs.count == m.history.count && !m.history.isEmpty ? L("Deselect All") : L("Select All")) {
+                    m.markedIDs = m.markedIDs.count == m.history.count ? [] : Set(m.history.map(\.id))
+                }
+                Spacer()
+                Button(L("Delete Selected (%@)", String(m.markedIDs.count))) { m.requestDeletion(m.markedIDs) }
+                    .disabled(m.markedIDs.isEmpty)
+            }.font(.caption).padding(8)
             List(selection: $m.selectedID) {
                 ForEach(m.history) { r in
-                    HistoryRow(result: r).tag(r.id)
+                    HStack {
+                        Toggle("", isOn: Binding(get: { m.markedIDs.contains(r.id) }, set: { value in
+                            if value { m.markedIDs.insert(r.id) } else { m.markedIDs.remove(r.id) }
+                        })).toggleStyle(.checkbox).labelsHidden()
+                        HistoryRow(result: r)
+                    }.tag(r.id)
                         .contextMenu {
                             Button(L("Copy LaTeX")) { m.copy(r.latex) }
                             Button(L("Copy Markdown")) { m.copy(r.markdown) }
@@ -184,10 +204,11 @@ struct ResultDetail: View {
     private var text: Binding<String> {
         Binding(
             get: {
+                let current = m.history.first { $0.id == result.id } ?? result
                 switch format {
-                case .latex: return result.latex
-                case .markdown: return result.markdown
-                case .raw: return result.raw
+                case .latex: return current.latex
+                case .markdown: return current.markdown
+                case .raw: return current.raw
                 }
             },
             set: { v in
@@ -197,6 +218,12 @@ struct ResultDetail: View {
                 case .raw: break
                 }
             })
+    }
+
+    private var previewKind: String {
+        if format == .raw { return result.kind }
+        if result.kind == "table" { return "table" }
+        return format == .latex && result.kind == "formula" ? "formula" : "text"
     }
 
     var body: some View {
@@ -225,7 +252,7 @@ struct ResultDetail: View {
             }
 
             Section(L("Preview")) {
-                MathPreview(kind: result.kind, text: result.kind == "formula" ? result.latex : result.markdown)
+                MathPreview(kind: previewKind, text: format == .raw ? (result.kind == "formula" ? result.latex : result.markdown) : text.wrappedValue)
                     .frame(maxWidth: .infinity, minHeight: 120, idealHeight: 170, maxHeight: 220)
                     .background(Color(nsColor: .textBackgroundColor))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -249,9 +276,15 @@ struct ResultDetail: View {
                 .keyboardShortcut("c", modifiers: [.command, .shift])
             }
 
-            TextEditor(text: text)
-                .font(.system(size: 13, design: .monospaced))
-                .scrollContentBackground(.hidden)
+            if let error = m.editErrors[result.id] {
+                HStack {
+                    Text(L("Unsaved edits: %@", error)).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                    Spacer()
+                    Button(L("Retry Save")) { m.saveEdits(result.id) }
+                }
+            }
+            SourceEditor(text: text, editable: format != .raw)
+                .id(format)
                 .padding(6)
                 .background(Color(nsColor: .textBackgroundColor))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -274,14 +307,15 @@ struct ResultDetail: View {
 struct MathPreview: NSViewRepresentable {
     let kind: String
     let text: String
+    var previewURL: URL? = Bundle.main.url(forResource: "preview", withExtension: "html")
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator { Coordinator(previewURL: previewURL) }
 
     func makeNSView(context: Context) -> WKWebView {
         let web = WKWebView()
         web.setValue(false, forKey: "drawsBackground")
         web.navigationDelegate = context.coordinator
-        if let url = Bundle.main.url(forResource: "preview", withExtension: "html") {
+        if let url = previewURL {
             web.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         }
         context.coordinator.web = web
@@ -294,16 +328,30 @@ struct MathPreview: NSViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         weak var web: WKWebView?
+        private let previewURL: URL?
+        init(previewURL: URL? = Bundle.main.url(forResource: "preview", withExtension: "html")) {
+            self.previewURL = previewURL
+        }
         private var loaded = false
         private var pending: (String, String)?
+        private var renderWork: DispatchWorkItem?
+        private var rendered: [String]?
+
+        deinit { renderWork?.cancel() }
 
         func render(kind: String, text: String) {
+            guard pending?.0 != kind || pending?.1 != text else { return }
             pending = (kind, text)
-            flush()
+            renderWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.flush() }
+            renderWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
         }
 
         private func flush() {
             guard loaded, let web, let (kind, text) = pending else { return }
+            guard rendered != [kind, text] else { return }
+            rendered = [kind, text]
             let args = (try? JSONSerialization.data(withJSONObject: [kind, text]))
                 .flatMap { String(data: $0, encoding: .utf8) } ?? "[\"text\", \"\"]"
             web.evaluateJavaScript("render(...\(args))")
@@ -317,7 +365,7 @@ struct MathPreview: NSViewRepresentable {
         /// 只允许加载应用自带的 preview.html；识别结果中的内容不能让页面跳转到其他地址
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-            let preview = Bundle.main.url(forResource: "preview", withExtension: "html")
+            let preview = previewURL
             let allowed = action.request.url?.isFileURL == true
                 && action.request.url?.standardizedFileURL == preview?.standardizedFileURL
             decisionHandler(allowed ? .allow : .cancel)

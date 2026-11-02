@@ -30,7 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        model.server.stop()
+        model.shutdown()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -111,9 +111,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let status = NSMenuItem(title: model.serverState.title, action: nil, keyEquivalent: "")
         status.isEnabled = false
         menu.addItem(status)
-        if model.serverState == .failed {
-            menu.addItem(makeItem(L("Restart Model Service"), #selector(restartServer)))
-        }
+        let load = makeItem(L("Load Model"), #selector(restartServer))
+        load.isEnabled = !model.busy && !model.serviceTransitioning && model.serverState != .ready
+        menu.addItem(load)
+        let unload = makeItem(L("Unload Model"), #selector(unloadServer))
+        unload.isEnabled = !model.busy && model.serverState != .unloaded && model.serverState != .stopping
+        menu.addItem(unload)
         menu.addItem(.separator())
         menu.addItem(makeItem(L("Restart Formulens"), #selector(relaunchAction)))
         let quit = makeItem(L("Quit Formulens"), #selector(quitAction))
@@ -153,6 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     @objc private func restartServer() { model.startServer() }
+    @objc private func unloadServer() { model.unloadServer() }
     @objc private func showWindowAction() { showWindow() }
     @objc private func quitAction() { NSApp.terminate(nil) }
     @objc private func relaunchAction() { relaunch() }
