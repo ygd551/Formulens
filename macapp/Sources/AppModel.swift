@@ -14,10 +14,12 @@ enum CopyFormat: String, CaseIterable {
 }
 
 enum ServerState {
-    case starting, ready, failed
+    case unloaded, starting, ready, stopping, failed
 
     var title: String {
         switch self {
+        case .unloaded: return L("Model service: unloaded")
+        case .stopping: return L("Model service: unloading…")
         case .starting: return L("Model service: starting…")
         case .ready: return L("Model service: running")
         case .failed: return L("Model service: failed to start (see ~/Library/Application Support/Formulens/model_server.log)")
@@ -30,8 +32,9 @@ final class AppModel: ObservableObject {
     @Published var selectedID: String?
     @Published var busy = false
     @Published var pendingImage: NSImage?
-    @Published var serverState: ServerState = .starting
+    @Published var serverState: ServerState = .unloaded
     @Published var toast: String?
+    @Published private(set) var serviceError: String?
 
     @Published var mode: RecognizeMode {
         didSet { UserDefaults.standard.set(mode.rawValue, forKey: "mode") }
@@ -50,43 +53,136 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(copyFormat.rawValue, forKey: "copyFormat") }
     }
 
-    let store = HistoryStore()
-    let server = ModelServer()
+    let store: HistoryStore
+    let server: ModelServer
+    let catalog: ModelCatalog
+    @Published private(set) var selectedModelID: String
+    var modelProfiles: [ModelProfile] { catalog.profiles }
+    private let serviceQueue = DispatchQueue(label: "Formulens.service", qos: .utility)
+    private let generation = ServiceGeneration()
+    var serviceTransitioning: Bool { serverState == .starting || serverState == .stopping }
+    var canManageModels: Bool { !busy && !serviceTransitioning }
     // 不用 lazy：识别器会在多个后台线程中使用，lazy 初始化不是线程安全的
-    let recognizer: Recognizer
+    private(set) var recognizer: Recognizer
     var onServerStateChange: (() -> Void)?
     private var toastWork: DispatchWorkItem?
-    private var serverStarting = false
 
-    init() {
-        recognizer = Recognizer(server: server, modelPath: Paths.modelDir.path)
+    init(store: HistoryStore = HistoryStore(), server: ModelServer = ModelServer(),
+         catalog: ModelCatalog = ModelCatalog()) {
+        self.store = store
+        self.server = server
+        self.catalog = catalog
+        selectedModelID = catalog.selectedID
+        recognizer = Recognizer(server: server, modelPath: catalog.selected.path, promptStyle: catalog.selected.style)
         mode = RecognizeMode(rawValue: UserDefaults.standard.string(forKey: "mode") ?? "") ?? .auto
         copyFormat = CopyFormat(rawValue: UserDefaults.standard.string(forKey: "copyFormat") ?? "") ?? .auto
         history = store.load()
         selectedID = history.first?.id
+        server.onExit = { [weak self] pid in
+            DispatchQueue.main.async {
+                guard let self, self.serverState == .ready, self.server.processID == pid else { return }
+                self.serverState = .failed
+                self.serviceError = L("The model service exited unexpectedly. See model_server.log")
+                self.onServerStateChange?()
+                self.showToast(L("The model service exited unexpectedly. See model_server.log"))
+            }
+        }
     }
 
     var selected: OCRResult? { history.first { $0.id == selectedID } }
 
     // MARK: 推理服务
 
-    /// 主线程调用
+    /// All state publication is on the main queue; process work stays serialized.
     func startServer() {
-        guard !serverStarting else { return }
-        serverStarting = true
+        guard !busy, !serviceTransitioning else { return }
+        let token = generation.advance()
+        let profile = catalog.selected
+        let next = Recognizer(server: server, modelPath: profile.path, promptStyle: profile.style)
+        recognizer = next
         serverState = .starting
+        serviceError = nil
         onServerStateChange?()
-        DispatchQueue.global(qos: .utility).async {
-            let ok = self.server.ensureRunning()
-            if ok { self.recognizer.warmUp() }
-            let error = self.server.lastError
-            DispatchQueue.main.async {
-                self.serverStarting = false
-                self.serverState = ok ? .ready : .failed
-                self.onServerStateChange?()
-                if !ok, let error { self.showToast(L("Model service failed to start: %@", error)) }
+        serviceQueue.async {
+            self.server.stop()
+            guard self.generation.isCurrent(token) else { return }
+            do {
+                try profile.validate()
+                guard self.server.ensureRunning(cancelled: { !self.generation.isCurrent(token) }) else {
+                    throw RecognizeError(message: self.server.lastError ?? L("Model service failed to start"))
+                }
+                try next.warmUp(cancelled: { !self.generation.isCurrent(token) })
+                guard self.server.ownsProcess else {
+                    throw RecognizeError(message: L("The model service exited unexpectedly. See model_server.log"))
+                }
+                DispatchQueue.main.async {
+                    guard self.generation.isCurrent(token) else { return }
+                    self.serverState = self.server.ownsProcess ? .ready : .failed
+                    if self.serverState == .failed { self.serviceError = L("The model service exited unexpectedly. See model_server.log") }
+                    self.onServerStateChange?()
+                }
+            } catch {
+                self.server.stop()
+                DispatchQueue.main.async {
+                    guard self.generation.isCurrent(token) else { return }
+                    self.serverState = .failed
+                    self.serviceError = error.localizedDescription
+                    self.onServerStateChange?()
+                    self.showToast(L("Model service failed to start: %@", error.localizedDescription))
+                }
             }
         }
+    }
+
+    func unloadServer() {
+        guard !busy, serverState != .stopping, serverState != .unloaded else { return }
+        let token = generation.advance()
+        serverState = .stopping
+        serviceError = nil
+        onServerStateChange?()
+        server.cancelStartup()
+        recognizer.cancelRequests()
+        serviceQueue.async {
+            self.server.stop()
+            DispatchQueue.main.async {
+                guard self.generation.isCurrent(token) else { return }
+                self.serverState = .unloaded
+                self.onServerStateChange?()
+            }
+        }
+    }
+
+    func shutdown() {
+        generation.advance()
+        server.cancelStartup()
+        recognizer.cancelRequests()
+        server.stop()
+    }
+
+    func selectModel(_ id: String) {
+        guard canManageModels, id != selectedModelID else { return }
+        do {
+            try catalog.select(id)
+            selectedModelID = catalog.selectedID
+            if serverState != .unloaded { unloadServer() }
+        } catch { showToast(error.localizedDescription) }
+    }
+
+    func addModel(_ url: URL, style: ModelPromptStyle) throws {
+        guard canManageModels else { throw RecognizeError(message: L("Wait for the current operation to finish")) }
+        let profile = try catalog.register(url, style: style)
+        objectWillChange.send()
+        selectModel(profile.id)
+    }
+
+    func removeModel(_ id: String) {
+        guard canManageModels else { return }
+        do {
+            if id == selectedModelID, serverState != .unloaded { unloadServer() }
+            try catalog.remove(id)
+            selectedModelID = catalog.selectedID
+            objectWillChange.send()
+        } catch { showToast(error.localizedDescription) }
     }
 
     // MARK: 识别
@@ -94,7 +190,7 @@ final class AppModel: ObservableObject {
     func recognize(imageData: Data, mode: RecognizeMode? = nil) {
         guard !busy else { return }
         guard serverState == .ready else {
-            showToast(serverState == .starting ? L("The model service is starting, please wait…") : L("The model service failed to start. See ~/Library/Application Support/Formulens/model_server.log"))
+            showToast(serverState == .starting ? L("The model service is starting, please wait…") : L("Load a model before recognizing"))
             return
         }
         do {
@@ -116,7 +212,7 @@ final class AppModel: ObservableObject {
                                        kind: r.kind, latex: r.latex, markdown: r.markdown, raw: r.raw,
                                        seconds: seconds)
                 let original = NSBitmapImageRep(data: imageData)?.representation(using: .png, properties: [:])
-                self.store.save(result, png: original ?? png)
+                try self.store.save(result, png: original ?? png)
                 DispatchQueue.main.async {
                     self.history.insert(result, at: 0)
                     self.selectedID = result.id
@@ -130,7 +226,10 @@ final class AppModel: ObservableObject {
                     self.busy = false
                     self.pendingImage = nil
                     self.showToast(L("Recognition failed: %@", error.localizedDescription))
-                    if !alive { self.startServer() }
+                    if !alive {
+                        self.serverState = .failed
+                        self.onServerStateChange?()
+                    }
                 }
             }
         }
@@ -163,16 +262,63 @@ final class AppModel: ObservableObject {
 
     func update(_ id: String, latex: String? = nil, markdown: String? = nil) {
         guard let i = history.firstIndex(where: { $0.id == id }) else { return }
-        if let latex { history[i].latex = latex }
-        if let markdown { history[i].markdown = markdown }
-        store.save(history[i], png: nil)
+        var result = history[i]
+        if let latex {
+            result.latex = latex
+            if result.kind == "formula" { result.markdown = "$$\n\(latex)\n$$" }
+        }
+        if let markdown {
+            result.markdown = markdown
+            if result.kind == "formula", let pure = TextFormat.stripMath(markdown) { result.latex = pure }
+        }
+        // Keep the draft even if disk writes fail. Returning the old binding
+        // value here would overwrite the editor and move its caret backwards.
+        history[i] = result
+        saveEdits(id)
     }
 
-    func delete(_ id: String) {
-        guard let i = history.firstIndex(where: { $0.id == id }) else { return }
-        store.delete(id)
-        history.remove(at: i)
-        selectedID = history.isEmpty ? nil : history[min(i, history.count - 1)].id
+    @Published private(set) var editErrors: [String: String] = [:]
+
+    func saveEdits(_ id: String) {
+        guard let result = history.first(where: { $0.id == id }) else { return }
+        do {
+            try store.save(result, png: nil)
+            editErrors[id] = nil
+        } catch {
+            editErrors[id] = error.localizedDescription
+            showToast(L("Edits are kept in memory but could not be saved: %@", error.localizedDescription))
+        }
+    }
+
+    @Published var deletionIDs: Set<String> = []
+    @Published var showDeletionConfirmation = false
+    @Published var markedIDs: Set<String> = []
+
+    func requestDeletion(_ ids: Set<String>) {
+        deletionIDs = ids.intersection(Set(history.map(\.id)))
+        showDeletionConfirmation = !deletionIDs.isEmpty
+    }
+
+    func delete(_ id: String) { requestDeletion([id]) }
+
+    func confirmDeletion() {
+        let ids = deletionIDs
+        showDeletionConfirmation = false
+        deletionIDs = []
+        let oldIndex = history.firstIndex { $0.id == selectedID } ?? 0
+        var deleted = Set<String>()
+        var errors: [String] = []
+        for id in ids where history.contains(where: { $0.id == id }) {
+            do { try store.delete(id); deleted.insert(id) }
+            catch { errors.append("\(id): \(error.localizedDescription)") }
+        }
+        history.removeAll { deleted.contains($0.id) }
+        markedIDs.subtract(deleted)
+        for id in deleted { editErrors[id] = nil }
+        if let selectedID, deleted.contains(selectedID) {
+            self.selectedID = history.isEmpty ? nil : history[min(oldIndex, history.count - 1)].id
+        }
+        if !errors.isEmpty { showToast(L("Some history files could not be deleted: %@", errors.joined(separator: "; "))) }
     }
 
     func showToast(_ text: String) {

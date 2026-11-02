@@ -43,6 +43,14 @@ struct OCRResult: Codable, Identifiable, Equatable {
 final class Recognizer {
     let server: ModelServer
     let modelPath: String
+    let promptStyle: ModelPromptStyle
+    private let requestLock = NSLock()
+    private var activeRequest: URLSessionDataTask?
+
+    func cancelRequests() {
+        requestLock.lock(); defer { requestLock.unlock() }
+        activeRequest?.cancel()
+    }
 
     static let prompts = [
         "formula": "Formula Recognition:",
@@ -50,9 +58,10 @@ final class Recognizer {
         "table": "Table Recognition:",
     ]
 
-    init(server: ModelServer, modelPath: String) {
+    init(server: ModelServer, modelPath: String, promptStyle: ModelPromptStyle = .paddleOCR) {
         self.server = server
         self.modelPath = modelPath
+        self.promptStyle = promptStyle
     }
 
     /// 同步调用，需在后台线程使用
@@ -82,6 +91,9 @@ final class Recognizer {
             let md = TextFormat.otslToMarkdown(raw)
             return ("table", md, md, raw)
         }
+        if mode == .table, promptStyle == .generalVLM {
+            return ("table", raw, raw, raw)
+        }
         if let found = TextFormat.stripMath(raw) ?? (asFormula ? TextFormat.trimDelimiters(raw) : nil) {
             let pure = TextFormat.dropNumberingCommands(found)
             return ("formula", pure, "$$\n\(pure)\n$$", raw)
@@ -90,7 +102,7 @@ final class Recognizer {
     }
 
     /// 预热：让模型提前加载进内存。用一张小公式图，限制输出长度
-    func warmUp() {
+    func warmUp(cancelled: () -> Bool = { false }) throws {
         let size = NSSize(width: 160, height: 48)
         let img = NSImage(size: size, flipped: false) { r in
             NSColor.white.setFill()
@@ -99,11 +111,12 @@ final class Recognizer {
                 .draw(at: NSPoint(x: 20, y: 8))
             return true
         }
-        guard let tiff = img.tiffRepresentation, let png = try? ImagePrep.png(from: tiff) else { return }
-        _ = try? call(png, task: "formula", maxTokens: 16)
+        guard let tiff = img.tiffRepresentation else { throw RecognizeError(message: L("Failed to process the image")) }
+        let png = try ImagePrep.png(from: tiff)
+        _ = try call(png, task: "formula", maxTokens: 16, cancelled: cancelled)
     }
 
-    private func call(_ png: Data, task: String, maxTokens: Int? = nil) throws -> String {
+    private func call(_ png: Data, task: String, maxTokens: Int? = nil, cancelled: () -> Bool = { false }) throws -> String {
         // 公式通常很短；限制长度，防止模型陷入重复输出
         let maxTokens = maxTokens ?? (task == "formula" ? 1024 : 4096)
         var req = URLRequest(url: server.baseURL.appendingPathComponent("chat/completions"))
@@ -117,7 +130,7 @@ final class Recognizer {
                 "role": "user",
                 "content": [
                     ["type": "image_url", "image_url": ["url": "data:image/png;base64," + png.base64EncodedString()]],
-                    ["type": "text", "text": Self.prompts[task]!],
+                    ["type": "text", "text": promptStyle.prompt(for: task)],
                 ],
             ]],
             "max_tokens": maxTokens,
@@ -127,7 +140,7 @@ final class Recognizer {
 
         var result: Result<String, Error> = .failure(RecognizeError(message: L("No response")))
         let sem = DispatchSemaphore(value: 0)
-        URLSession.shared.dataTask(with: req) { data, resp, err in
+        let request = URLSession.shared.dataTask(with: req) { data, resp, err in
             defer { sem.signal() }
             if let err {
                 result = .failure(RecognizeError(message: L("Cannot connect to the model service: %@", err.localizedDescription)))
@@ -145,8 +158,18 @@ final class Recognizer {
                 return
             }
             result = .success(content.trimmingCharacters(in: .whitespacesAndNewlines))
-        }.resume()
+        }
+        requestLock.lock()
+        if cancelled() {
+            requestLock.unlock()
+            throw CancellationError()
+        }
+        activeRequest = request
+        request.resume()
+        requestLock.unlock()
         sem.wait()
+        requestLock.lock(); activeRequest = nil; requestLock.unlock()
+        if cancelled() { throw CancellationError() }
         return try result.get()
     }
 }

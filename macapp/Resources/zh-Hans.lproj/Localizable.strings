@@ -27,9 +27,6 @@
 "Image dimensions are too large (%@×%@)" = "图片尺寸过大（%@×%@）";
 "Image is too large (over 50 MB)" = "图片太大（超过 50MB）";
 "Launch at Login" = "登录时自动启动";
-"Loading model…" = "模型加载中…";
-"Model failed to start" = "模型启动失败";
-"Model ready" = "模型已就绪";
 "Model service failed to start: %@" = "推理服务启动失败：%@";
 "Model service: failed to start (see ~/Library/Application Support/Formulens/model_server.log)" = "推理服务：启动失败（见 ~/Library/Application Support/Formulens/model_server.log）";
 "Model service: running" = "推理服务：运行中";
@@ -52,7 +49,6 @@
 "Recognizing…" = "识别中…";
 "Redo" = "重做";
 "Restart Formulens" = "重新启动 Formulens";
-"Restart Model Service" = "重新启动推理服务";
 "Screen Recording permission required" = "需要「录屏与系统录音」权限";
 "Select All" = "全选";
 "Show Window" = "显示主窗口";
@@ -62,7 +58,6 @@
 "Text" = "文本";
 "Text + formulas" = "文本 + 公式";
 "The model service exited unexpectedly. See model_server.log" = "推理服务意外退出，请查看 model_server.log";
-"The model service failed to start. See ~/Library/Application Support/Formulens/model_server.log" = "推理服务启动失败，请查看 ~/Library/Application Support/Formulens/model_server.log";
 "The model service is starting, please wait…" = "推理服务启动中，请稍候…";
 "The model service returned error %@: %@" = "推理服务返回错误 %@：%@";
 "The model service timed out while starting" = "推理服务启动超时";
@@ -71,3 +66,45 @@
 "Undo" = "撤销";
 "Follow System" = "跟随系统";
 "Language" = "语言";
+
+// Model lifecycle, local models and batch history management
+"Add Local Model…" = "添加本地模型…";
+"Cancel Loading" = "取消加载";
+"Choose the general vision-language prompt style for this model" = "请为此模型选择通用视觉语言提示词";
+"Delete Selected (%@)" = "删除所选（%@）";
+"Delete selected history?" = "删除所选历史记录？";
+"Deselect All" = "取消全选";
+"Done" = "完成";
+"General vision-language model" = "通用视觉语言模型";
+"History directory is unsafe or unavailable" = "历史记录目录不安全或不可用";
+"History entry is not a regular file: %@" = "历史记录条目不是普通文件：%@";
+"Invalid history identifier" = "无效的历史记录标识";
+"Load Model" = "加载模型";
+"Load a model before recognizing" = "请先加载模型再识别";
+"Manage Models…" = "管理模型…";
+"Missing or invalid model file: %@" = "模型文件缺失或无效：%@";
+"Model Prompts" = "模型提示词";
+"Model config has no model_type" = "模型配置缺少 model_type";
+"Model directory does not exist: %@" = "模型目录不存在：%@";
+"Model directory has no readable safetensors weights" = "模型目录中没有可读取的 safetensors 权重";
+"Model service failed to start" = "模型服务启动失败";
+"Model service: unloaded" = "模型服务：已卸载";
+"Model service: unloading…" = "模型服务：正在卸载…";
+"Model weight index contains missing or unsafe shards" = "模型权重索引包含缺失或不安全的分片";
+"PaddleOCR compatible" = "PaddleOCR 兼容模型";
+"Permanently delete %@ records and their saved images? This cannot be undone." = "永久删除 %@ 条记录及其保存的图片？此操作无法撤销。";
+"Recognition Model" = "识别模型";
+"Recognition Models" = "识别模型";
+"Register a complete local MLX-VLM model folder. No downloads. Compatibility is checked when loading; custom Python code is never enabled." = "注册完整的本地 MLX-VLM 模型目录，不会下载文件。加载时检查兼容性，不启用自定义 Python 代码。";
+"Remove from List" = "从列表移除";
+"Removing a model from this list keeps all model files. Selecting another model unloads the previous one; click Load Model to use it." = "从列表移除模型会保留所有模型文件。选择其他模型会卸载原模型；点击“加载模型”后即可使用。";
+"Some history files could not be deleted: %@" = "部分历史文件未能删除：%@";
+"The bundled model cannot be removed" = "不能从列表移除内置模型";
+"This model directory is already registered" = "此模型目录已经注册";
+"Unknown model" = "未知模型";
+"Unload Model" = "卸载模型";
+"Wait for the current operation to finish" = "请等待当前操作完成";
+
+"Edits are kept in memory but could not be saved: %@" = "编辑内容保留在内存中，但无法保存：%@";
+"Unsaved edits: %@" = "未保存的编辑：%@";
+"Retry Save" = "重试保存";

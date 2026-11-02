@@ -45,7 +45,21 @@ enum Paths {
 /// 服务只监听 127.0.0.1，并要求随机访问密钥：mlx-vlm 允许任意网页跨域访问，
 /// 没有密钥时，浏览器里的网页或本机其他程序都能调用它。
 final class ModelServer {
-    let apiKey = ModelServer.loadOrCreateKey()
+    let apiKey: String
+    private let dataDir: URL
+    private let projectDirectory: URL
+    private let processFactory: ((Int) -> Process)?
+    private let ports: ClosedRange<Int>
+    var onExit: ((Int32) -> Void)?
+
+    init(apiKey: String? = nil, dataDir: URL = Paths.dataDir,
+         ports: ClosedRange<Int> = 8111...8119, projectDirectory: URL = Paths.projectDir, processFactory: ((Int) -> Process)? = nil) {
+        self.apiKey = apiKey ?? ModelServer.loadOrCreateKey()
+        self.dataDir = dataDir
+        self.projectDirectory = projectDirectory
+        self.ports = ports
+        self.processFactory = processFactory
+    }
     private(set) var lastError: String?
 
     // baseURL 会在后台线程更新、在识别线程读取，用锁保护
@@ -59,7 +73,11 @@ final class ModelServer {
     // 同一时间只允许一次启动流程（菜单「重新启动推理服务」和识别失败重试可能同时触发）
     private let startLock = NSLock()
 
-    private static let ports = 8111...8119
+    private var startupCancelled = false
+    func cancelStartup() { lock.lock(); startupCancelled = true; lock.unlock() }
+    private var isStartupCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }; return startupCancelled
+    }
 
     private enum Probe { case ours, down, foreign }
 
@@ -116,31 +134,35 @@ final class ModelServer {
     func isAlive() -> Bool { probe(baseURL) == .ours }
 
     /// 后台线程调用；返回是否就绪
-    func ensureRunning() -> Bool {
+    func ensureRunning(cancelled: () -> Bool = { false }) -> Bool {
         startLock.lock()
         defer { startLock.unlock() }
         lastError = nil
-        if process?.isRunning == true { return waitUntilReady() }
-        for port in Self.ports {
+        lock.lock(); startupCancelled = false; lock.unlock()
+        guard !cancelled() else { return false }
+        if process?.isRunning == true { return waitUntilReady(cancelled: cancelled) }
+        for port in ports {
+            if cancelled() || isStartupCancelled { return false }
             let url = URL(string: "http://127.0.0.1:\(port)/")!
             switch probe(url) {
             case .ours:
-                baseURL = url
-                return true
+                // Another app/CLI owns this process. Never adopt it: unloading
+                // must be able to reap every process that holds our model.
+                continue
             case .foreign:
                 continue
             case .down:
                 baseURL = url
                 guard launch(port: port) else { return false }
-                return waitUntilReady()
+                return waitUntilReady(cancelled: cancelled)
             }
         }
-        lastError = L("Ports %@–%@ are all in use by other programs", String(Self.ports.lowerBound), String(Self.ports.upperBound))
+        lastError = L("Ports %@–%@ are all in use by other programs", String(ports.lowerBound), String(ports.upperBound))
         return false
     }
 
     private func launch(port: Int) -> Bool {
-        let logURL = Paths.dataDir.appendingPathComponent("model_server.log")
+        let logURL = dataDir.appendingPathComponent("model_server.log")
         // 日志超过 5MB 时清空重写
         if let size = try? FileManager.default.attributesOfItem(atPath: logURL.path)[.size] as? Int, size > 5_000_000 {
             try? FileManager.default.removeItem(at: logURL)
@@ -152,8 +174,10 @@ final class ModelServer {
         let log = try? FileHandle(forWritingTo: logURL)
         log?.seekToEndOfFile()
 
-        let p = Process()
-        if Paths.isBundled {
+        let p = processFactory?(port) ?? Process()
+        if processFactory != nil {
+            // The embedding caller supplied the executable and arguments.
+        } else if Paths.isBundled {
             // 包内自带的 Python；-I 隔离用户环境，-B 不写 .pyc（保持应用签名完整）。
             // 通过 watchdog 启动：应用退出（包括崩溃、强制退出）后，推理服务随之退出，不会残留占用内存。
             p.executableURL = Paths.bundledPython
@@ -161,37 +185,44 @@ final class ModelServer {
             p.environment = [
                 "HOME": NSHomeDirectory(),
                 "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-                "HF_HOME": Paths.dataDir.appendingPathComponent("hf_cache").path,
+                "HF_HOME": dataDir.appendingPathComponent("hf_cache").path,
                 "HF_HUB_OFFLINE": "1",
                 "TRANSFORMERS_OFFLINE": "1",
+                "MLX_TRUST_REMOTE_CODE": "false",
                 "MLX_VLM_SERVER_API_KEY": apiKey,
             ]
         } else {
             p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            p.arguments = [Paths.projectDir.appendingPathComponent("start_server.sh").path]
+            p.arguments = [projectDirectory.appendingPathComponent("start_server.sh").path]
             var env = ProcessInfo.processInfo.environment
+            env["FORMULENS_APP_WATCHDOG"] = Self.watchdog
+            env["MLX_TRUST_REMOTE_CODE"] = "false"
+            env["TRANSFORMERS_OFFLINE"] = "1"
             env["VL_SERVER_PORT"] = "\(port)"
             env["MLX_VLM_SERVER_API_KEY"] = apiKey
             p.environment = env
         }
+        p.terminationHandler = { [weak self] child in self?.onExit?(child.processIdentifier) }
         p.standardOutput = log
         p.standardError = log
         do { try p.run() } catch {
             lastError = L("Cannot start the model service: %@", error.localizedDescription)
             return false
         }
-        process = p
+        lock.lock(); process = p; lock.unlock()
+        try? log?.close()
         return true
     }
 
-    private func waitUntilReady() -> Bool {
-        for _ in 0..<120 {
+    private func waitUntilReady(cancelled: () -> Bool) -> Bool {
+        for _ in 0..<240 {
+            if cancelled() || isStartupCancelled { return false }
             if isAlive() { return true }
             if process?.isRunning != true {
                 lastError = L("The model service exited unexpectedly. See model_server.log")
                 return false
             }
-            Thread.sleep(forTimeInterval: 1)
+            Thread.sleep(forTimeInterval: 0.5)
         }
         lastError = L("The model service timed out while starting")
         return false
@@ -210,11 +241,16 @@ final class ModelServer {
     runpy.run_module("mlx_vlm.server", run_name="__main__", alter_sys=True)
     """
 
-    var ownsProcess: Bool { process?.isRunning == true }
+    var ownsProcess: Bool { lock.lock(); defer { lock.unlock() }; return process?.isRunning == true }
+    var processID: Int32? { lock.lock(); defer { lock.unlock() }; return process?.processIdentifier }
 
     /// 退出时关闭推理服务。正在生成时服务会等生成结束才退出，最多等 3 秒，之后强制结束
     func stop() {
-        guard let p = process, p.isRunning else { return }
+        cancelStartup()
+        startLock.lock(); defer { startLock.unlock() }
+        guard let p = process else { return }
+        defer { lock.lock(); process = nil; lock.unlock() }
+        guard p.isRunning else { p.waitUntilExit(); return }
         p.terminate()
         let deadline = Date().addingTimeInterval(3)
         while p.isRunning, Date() < deadline {
@@ -224,56 +260,6 @@ final class ModelServer {
             kill(p.processIdentifier, SIGKILL)
             p.waitUntilExit()
         }
-    }
-}
-
-/// 历史记录：~/Library/Application Support/Formulens/history/<id>.png + <id>.json
-final class HistoryStore {
-    let dir = Paths.dataDir.appendingPathComponent("history")
-    private var thumbCache: [String: NSImage] = [:]
-
-    init() {
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    }
-
-    func load() -> [OCRResult] {
-        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-        return files.filter { $0.pathExtension == "json" }
-            .sorted { $0.lastPathComponent > $1.lastPathComponent }
-            .compactMap { try? JSONDecoder().decode(OCRResult.self, from: Data(contentsOf: $0)) }
-    }
-
-    func imageURL(_ id: String) -> URL { dir.appendingPathComponent("\(id).png") }
-
-    func image(_ id: String) -> NSImage? {
-        if let img = thumbCache[id] { return img }
-        let img = NSImage(contentsOf: imageURL(id))
-        thumbCache[id] = img
-        return img
-    }
-
-    func save(_ r: OCRResult, png: Data?) {
-        if let png { try? png.write(to: imageURL(r.id)) }
-        let enc = JSONEncoder()
-        enc.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
-        try? enc.encode(r).write(to: dir.appendingPathComponent("\(r.id).json"))
-    }
-
-    func delete(_ id: String) {
-        thumbCache[id] = nil
-        try? FileManager.default.removeItem(at: imageURL(id))
-        try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(id).json"))
-    }
-
-    static func newID() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyyMMdd-HHmmss"
-        return f.string(from: Date()) + "-" + String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(6)).lowercased()
-    }
-
-    static func now() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return f.string(from: Date())
+        p.waitUntilExit()
     }
 }

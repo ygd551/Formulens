@@ -22,6 +22,7 @@ See the [roadmap](#roadmap) for what's next.
 - **⌃⌘M** to snip a screen region; the result is copied to the clipboard automatically
 - Detects the content type: a single formula → LaTeX; text with inline math → Markdown (`$...$`); tables → Markdown tables
 - Result window with the original image, a rendered preview, editable LaTeX / Markdown source, and history
+- Manual model load/unload, local compatible model registration, stable source editing with live preview, and confirmed batch history deletion; see [model and history guide](docs/refactor.md)
 - Paste images with ⌘V, drag images in, or re-recognize with a specific mode
 - English and Simplified Chinese UI: follows the system language by default; switch any time from the ∑ menu bar icon → "Language" or the 🌐 button in the window
 - Speed (measured on M4): about 1–2 s per formula, about 2 s for a paragraph with inline math
@@ -58,7 +59,7 @@ See the [roadmap](#roadmap) for what's next.
 | ⇧⌘C | Copy the LaTeX / Markdown currently shown |
 | ∑ in the menu bar | Recognition mode, copy format, language, launch at login, restart, quit |
 
-The menu bar icon shows `∑·` while the model is loading and `∑…` while recognizing.
+The menu bar icon shows `∑·` while the model is not ready (see its status tooltip) and `∑…` while recognizing.
 
 ## Privacy & security
 
